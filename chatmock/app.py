@@ -5,7 +5,7 @@ from flask import Flask, jsonify
 from .config import BASE_INSTRUCTIONS, GPT5_CODEX_INSTRUCTIONS
 from .http import build_cors_headers
 from .routes_anthropic import anthropic_bp
-from .routes_dashboard import dashboard_bp
+from .routes_dashboard import apply_persisted_dashboard_settings, dashboard_bp
 from .routes_openai import openai_bp
 from .routes_ollama import ollama_bp
 
@@ -34,6 +34,8 @@ def create_app(
         EXPOSE_REASONING_MODELS=bool(expose_reasoning_models),
         DEFAULT_WEB_SEARCH=bool(default_web_search),
     )
+    # Apply persisted dashboard settings first so runtime config survives restarts.
+    apply_persisted_dashboard_settings(app)
 
     @app.get("/")
     @app.get("/health")

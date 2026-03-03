@@ -290,6 +290,57 @@ h3 {
   font-size: 12px;
 }
 
+.settings-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-field span {
+  color: var(--subtle);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+
+.setting-field input,
+.setting-field select {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  min-height: 36px;
+  background: rgba(8, 16, 20, 0.76);
+  color: #d8ece8;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.toggle-grid {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.toggle-item {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: #c7ddd9;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.toggle-item input {
+  accent-color: var(--signal);
+}
+
 .config-wrap {
   display: grid;
   gap: 12px;
@@ -420,6 +471,10 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .config-wrap {
+    grid-template-columns: 1fr;
+  }
+  .settings-grid,
+  .toggle-grid {
     grid-template-columns: 1fr;
   }
   .topbar {

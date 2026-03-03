@@ -16,7 +16,28 @@ const nodes = {
   authFiles: $("auth-files"),
   authReplace: $("auth-replace"),
   toast: $("toast"),
+  settingsPath: $("settings-path"),
+  settingsSaveHint: $("settings-save-hint"),
+
+  setRoutingStrategy: $("set-routing-strategy"),
+  setRequestRetry: $("set-request-retry"),
+  setMaxRetryInterval: $("set-max-retry-interval"),
+  setReasoningEffort: $("set-reasoning-effort"),
+  setReasoningSummary: $("set-reasoning-summary"),
+  setReasoningCompat: $("set-reasoning-compat"),
+  setExposeReasoningModels: $("set-expose-reasoning-models"),
+  setEnableWebSearch: $("set-enable-web-search"),
+  setVerbose: $("set-verbose"),
+  setVerboseObfuscation: $("set-verbose-obfuscation"),
+  setHttpProxy: $("set-http-proxy"),
+  setHttpsProxy: $("set-https-proxy"),
+  setAllProxy: $("set-all-proxy"),
+  setNoProxy: $("set-no-proxy"),
 };
+
+let settingsLoaded = false;
+let settingsSaveTimer = null;
+let savingSettings = false;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -48,6 +69,14 @@ function showToast(message, isError = false) {
   nodes.toast.style.borderColor = isError ? "rgba(255,94,94,0.66)" : "rgba(97,224,200,0.55)";
   nodes.toast.classList.add("show");
   setTimeout(() => nodes.toast.classList.remove("show"), 2100);
+}
+
+function setSettingsHint(text, isError = false) {
+  if (!nodes.settingsSaveHint) {
+    return;
+  }
+  nodes.settingsSaveHint.textContent = text;
+  nodes.settingsSaveHint.style.color = isError ? "#ffb5b5" : "";
 }
 
 function classifyServiceChip(health) {
@@ -146,6 +175,150 @@ function renderConfig(payload) {
 
 function renderLogs(payload) {
   nodes.logs.textContent = payload?.text || "读取失败";
+}
+
+function readSettingsForm() {
+  return {
+    routingStrategy: nodes.setRoutingStrategy?.value || "round-robin",
+    requestRetry: Number(nodes.setRequestRetry?.value || 0),
+    maxRetryInterval: Number(nodes.setMaxRetryInterval?.value || 30),
+    reasoningEffort: nodes.setReasoningEffort?.value || "medium",
+    reasoningSummary: nodes.setReasoningSummary?.value || "auto",
+    reasoningCompat: nodes.setReasoningCompat?.value || "think-tags",
+    exposeReasoningModels: Boolean(nodes.setExposeReasoningModels?.checked),
+    enableWebSearch: Boolean(nodes.setEnableWebSearch?.checked),
+    verbose: Boolean(nodes.setVerbose?.checked),
+    verboseObfuscation: Boolean(nodes.setVerboseObfuscation?.checked),
+    httpProxy: nodes.setHttpProxy?.value || "",
+    httpsProxy: nodes.setHttpsProxy?.value || "",
+    allProxy: nodes.setAllProxy?.value || "",
+    noProxy: nodes.setNoProxy?.value || "",
+    uploadReplaceDefault: Boolean(nodes.authReplace?.checked),
+  };
+}
+
+function applySettingsForm(settings = {}) {
+  if (nodes.setRoutingStrategy) {
+    nodes.setRoutingStrategy.value = settings.routingStrategy || "round-robin";
+  }
+  if (nodes.setRequestRetry) {
+    nodes.setRequestRetry.value = String(settings.requestRetry ?? 3);
+  }
+  if (nodes.setMaxRetryInterval) {
+    nodes.setMaxRetryInterval.value = String(settings.maxRetryInterval ?? 30);
+  }
+  if (nodes.setReasoningEffort) {
+    nodes.setReasoningEffort.value = settings.reasoningEffort || "medium";
+  }
+  if (nodes.setReasoningSummary) {
+    nodes.setReasoningSummary.value = settings.reasoningSummary || "auto";
+  }
+  if (nodes.setReasoningCompat) {
+    nodes.setReasoningCompat.value = settings.reasoningCompat || "think-tags";
+  }
+  if (nodes.setExposeReasoningModels) {
+    nodes.setExposeReasoningModels.checked = Boolean(settings.exposeReasoningModels);
+  }
+  if (nodes.setEnableWebSearch) {
+    nodes.setEnableWebSearch.checked = Boolean(settings.enableWebSearch);
+  }
+  if (nodes.setVerbose) {
+    nodes.setVerbose.checked = Boolean(settings.verbose);
+  }
+  if (nodes.setVerboseObfuscation) {
+    nodes.setVerboseObfuscation.checked = Boolean(settings.verboseObfuscation);
+  }
+  if (nodes.setHttpProxy) {
+    nodes.setHttpProxy.value = settings.httpProxy || "";
+  }
+  if (nodes.setHttpsProxy) {
+    nodes.setHttpsProxy.value = settings.httpsProxy || "";
+  }
+  if (nodes.setAllProxy) {
+    nodes.setAllProxy.value = settings.allProxy || "";
+  }
+  if (nodes.setNoProxy) {
+    nodes.setNoProxy.value = settings.noProxy || "";
+  }
+  if (nodes.authReplace) {
+    nodes.authReplace.checked = Boolean(settings.uploadReplaceDefault);
+  }
+}
+
+async function loadSettings() {
+  const payload = await api("/api/settings");
+  applySettingsForm(payload?.settings || {});
+  if (nodes.settingsPath) {
+    nodes.settingsPath.textContent = payload?.settingsPath || "-";
+  }
+  setSettingsHint("自动保存：已加载");
+}
+
+async function saveSettings(showOkToast = false) {
+  if (!settingsLoaded || savingSettings) {
+    return;
+  }
+  savingSettings = true;
+  setSettingsHint("自动保存：保存中...");
+  try {
+    const payload = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(readSettingsForm()),
+    });
+    if (nodes.settingsPath) {
+      nodes.settingsPath.textContent = payload?.settingsPath || "-";
+    }
+    setSettingsHint("自动保存：已保存");
+    if (showOkToast) {
+      showToast("设置已保存");
+    }
+  } catch (error) {
+    setOutput(String(error.message || error));
+    setSettingsHint("自动保存：失败", true);
+    showToast("设置保存失败", true);
+  } finally {
+    savingSettings = false;
+  }
+}
+
+function scheduleSettingsSave() {
+  if (!settingsLoaded) {
+    return;
+  }
+  if (settingsSaveTimer) {
+    clearTimeout(settingsSaveTimer);
+  }
+  setSettingsHint("自动保存：等待写入...");
+  settingsSaveTimer = setTimeout(() => {
+    saveSettings(false);
+  }, 450);
+}
+
+function bindSettingsAutosave() {
+  const controls = [
+    nodes.setRoutingStrategy,
+    nodes.setRequestRetry,
+    nodes.setMaxRetryInterval,
+    nodes.setReasoningEffort,
+    nodes.setReasoningSummary,
+    nodes.setReasoningCompat,
+    nodes.setExposeReasoningModels,
+    nodes.setEnableWebSearch,
+    nodes.setVerbose,
+    nodes.setVerboseObfuscation,
+    nodes.setHttpProxy,
+    nodes.setHttpsProxy,
+    nodes.setAllProxy,
+    nodes.setNoProxy,
+    nodes.authReplace,
+  ].filter(Boolean);
+
+  controls.forEach((node) => {
+    node.addEventListener("change", scheduleSettingsSave);
+    if (node.tagName === "INPUT" && node.type !== "checkbox") {
+      node.addEventListener("input", scheduleSettingsSave);
+    }
+  });
 }
 
 async function refreshHealth() {
@@ -251,6 +424,14 @@ async function uploadAuthFiles() {
     ];
     setOutput(lines.join("\n"));
     fileInput.value = "";
+
+    if (payload.savedSettings) {
+      applySettingsForm(payload.savedSettings);
+    }
+    if (nodes.settingsPath && payload.settingsPath) {
+      nodes.settingsPath.textContent = payload.settingsPath;
+    }
+
     await refreshAll();
     showToast("Credentials uploaded");
   } catch (error) {
@@ -271,12 +452,21 @@ function bindActions() {
   $("btn-models").addEventListener("click", refreshModels);
   $("btn-logs").addEventListener("click", refreshLogs);
   $("btn-config").addEventListener("click", refreshConfig);
+
   const uploadBtn = $("btn-upload-auth");
   if (uploadBtn) {
     uploadBtn.addEventListener("click", uploadAuthFiles);
   }
 }
 
-bindActions();
-refreshAll();
-setInterval(refreshHealth, 15000);
+async function init() {
+  bindActions();
+  bindSettingsAutosave();
+
+  await Promise.allSettled([loadSettings(), refreshAll()]);
+  settingsLoaded = true;
+  setSettingsHint("自动保存：已启用");
+  setInterval(refreshHealth, 15000);
+}
+
+init();

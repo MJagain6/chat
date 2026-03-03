@@ -61,7 +61,7 @@
           <button id="btn-config" class="btn">刷新配置</button>
         </div>
         <div class="upload-auth-wrap">
-          <p class="upload-auth-title">Upload auth.json files (multi-select supported)</p>
+          <p class="upload-auth-title">上传 auth.json（支持多选）</p>
           <input id="auth-files" class="upload-auth-input" type="file" accept=".json,application/json" multiple />
           <label class="upload-auth-replace">
             <input id="auth-replace" type="checkbox" />
@@ -70,6 +70,82 @@
           <button id="btn-upload-auth" class="btn btn-main">Upload Credentials</button>
         </div>
         <pre id="ops-output" class="output-box">等待操作...</pre>
+      </section>
+
+      <section class="panel">
+        <h2>启动参数</h2>
+        <div class="settings-grid">
+          <label class="setting-field">
+            <span>Routing Strategy</span>
+            <select id="set-routing-strategy">
+              <option value="round-robin">round-robin</option>
+              <option value="random">random</option>
+              <option value="first">first</option>
+            </select>
+          </label>
+          <label class="setting-field">
+            <span>Request Retry</span>
+            <input id="set-request-retry" type="number" min="0" max="10" />
+          </label>
+          <label class="setting-field">
+            <span>Max Retry Interval (s)</span>
+            <input id="set-max-retry-interval" type="number" min="1" max="300" />
+          </label>
+          <label class="setting-field">
+            <span>Reasoning Effort</span>
+            <select id="set-reasoning-effort">
+              <option value="minimal">minimal</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+            </select>
+          </label>
+          <label class="setting-field">
+            <span>Reasoning Summary</span>
+            <select id="set-reasoning-summary">
+              <option value="auto">auto</option>
+              <option value="concise">concise</option>
+              <option value="detailed">detailed</option>
+              <option value="none">none</option>
+            </select>
+          </label>
+          <label class="setting-field">
+            <span>Reasoning Compat</span>
+            <select id="set-reasoning-compat">
+              <option value="think-tags">think-tags</option>
+              <option value="legacy">legacy</option>
+              <option value="o3">o3</option>
+              <option value="current">current</option>
+            </select>
+          </label>
+          <label class="setting-field">
+            <span>HTTP_PROXY</span>
+            <input id="set-http-proxy" type="text" placeholder="http://127.0.0.1:7890" />
+          </label>
+          <label class="setting-field">
+            <span>HTTPS_PROXY</span>
+            <input id="set-https-proxy" type="text" placeholder="http://127.0.0.1:7890" />
+          </label>
+          <label class="setting-field">
+            <span>ALL_PROXY</span>
+            <input id="set-all-proxy" type="text" placeholder="socks5://127.0.0.1:7890" />
+          </label>
+          <label class="setting-field">
+            <span>NO_PROXY</span>
+            <input id="set-no-proxy" type="text" placeholder="127.0.0.1,localhost" />
+          </label>
+        </div>
+
+        <div class="toggle-grid">
+          <label class="toggle-item"><input id="set-expose-reasoning-models" type="checkbox" /> Expose reasoning models</label>
+          <label class="toggle-item"><input id="set-enable-web-search" type="checkbox" /> Enable web search by default</label>
+          <label class="toggle-item"><input id="set-verbose" type="checkbox" /> Verbose</label>
+          <label class="toggle-item"><input id="set-verbose-obfuscation" type="checkbox" /> Verbose obfuscation</label>
+        </div>
+
+        <p class="hint" id="settings-save-hint">自动保存：等待更改</p>
+        <p class="hint">settings file: <span id="settings-path">-</span></p>
       </section>
 
       <section class="panel">
