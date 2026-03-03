@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: chatmock
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash scripts/render-start.sh
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: CHATGPT_LOCAL_ROUTING_STRATEGY
+        value: round-robin
+      - key: CHATGPT_LOCAL_REQUEST_RETRY
+        value: "0"
+      - key: CHATGPT_LOCAL_MAX_RETRY_INTERVAL
+        value: "5"
