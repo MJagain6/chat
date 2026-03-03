@@ -95,6 +95,8 @@ ChatMock now includes a web dashboard inspired by the openclaw control panel.
 Optional env vars:
 - `CHATMOCK_DASHBOARD_LOG_PATH`: log file path used by `/api/logs`
 - `CHATMOCK_SERVICE_NAME`: if set, enables service start/stop/restart buttons via `systemctl`
+- `CHATMOCK_DASHBOARD_ALLOW_UPLOAD`: set `0` to disable dashboard credential upload API
+- `CHATMOCK_DASHBOARD_AUTH_DIR`: where uploaded `auth.json` files are stored (default `/tmp/chatmock-accounts`)
 
 ### Docker
 

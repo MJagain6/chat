@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ChatMock 控制台</title>
+    <title>ChatMock 鎺у埗鍙?/title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -19,77 +19,86 @@
     <header class="topbar">
       <div>
         <p class="kicker">CHATMOCK / MULTI ACCOUNT</p>
-        <h1>ChatMock 轮询控制台</h1>
+        <h1>ChatMock 杞鎺у埗鍙?/h1>
       </div>
       <div class="status-chip" id="service-chip">CHECKING...</div>
     </header>
 
     <main class="layout">
       <section class="panel panel-wide">
-        <h2>运行状态</h2>
+        <h2>杩愯鐘舵€?/h2>
         <div class="metrics">
           <article class="metric-card">
-            <p class="metric-label">服务状态</p>
+            <p class="metric-label">鏈嶅姟鐘舵€?/p>
             <p class="metric-value" id="metric-service">-</p>
           </article>
           <article class="metric-card">
-            <p class="metric-label">监听状态</p>
+            <p class="metric-label">鐩戝惉鐘舵€?/p>
             <p class="metric-value" id="metric-port">-</p>
           </article>
           <article class="metric-card">
-            <p class="metric-label">模型数量</p>
+            <p class="metric-label">妯″瀷鏁伴噺</p>
             <p class="metric-value" id="metric-models">-</p>
           </article>
           <article class="metric-card">
-            <p class="metric-label">账号数量</p>
+            <p class="metric-label">璐﹀彿鏁伴噺</p>
             <p class="metric-value" id="metric-auths">-</p>
           </article>
         </div>
-        <p class="hint" id="health-hint">最近检查：-</p>
+        <p class="hint" id="health-hint">鏈€杩戞鏌ワ細-</p>
       </section>
 
       <section class="panel">
-        <h2>运维操作</h2>
+        <h2>杩愮淮鎿嶄綔</h2>
         <div class="action-grid">
-          <button id="btn-refresh" class="btn btn-main">刷新总览</button>
-          <button id="btn-sync" class="btn">同步账号</button>
-          <button id="btn-restart" class="btn">重启服务</button>
-          <button id="btn-start" class="btn">启动服务</button>
-          <button id="btn-stop" class="btn btn-danger">停止服务</button>
-          <button id="btn-models" class="btn">刷新模型</button>
-          <button id="btn-logs" class="btn">刷新日志</button>
-          <button id="btn-config" class="btn">刷新配置</button>
+          <button id="btn-refresh" class="btn btn-main">鍒锋柊鎬昏</button>
+          <button id="btn-sync" class="btn">鍚屾璐﹀彿</button>
+          <button id="btn-restart" class="btn">閲嶅惎鏈嶅姟</button>
+          <button id="btn-start" class="btn">鍚姩鏈嶅姟</button>
+          <button id="btn-stop" class="btn btn-danger">鍋滄鏈嶅姟</button>
+          <button id="btn-models" class="btn">鍒锋柊妯″瀷</button>
+          <button id="btn-logs" class="btn">鍒锋柊鏃ュ織</button>
+          <button id="btn-config" class="btn">鍒锋柊閰嶇疆</button>
         </div>
-        <pre id="ops-output" class="output-box">等待操作...</pre>
+        <div class="upload-auth-wrap">
+          <p class="upload-auth-title">Upload auth.json files (multi-select supported)</p>
+          <input id="auth-files" class="upload-auth-input" type="file" accept=".json,application/json" multiple />
+          <label class="upload-auth-replace">
+            <input id="auth-replace" type="checkbox" />
+            Replace existing account pool
+          </label>
+          <button id="btn-upload-auth" class="btn btn-main">Upload Credentials</button>
+        </div>
+        <pre id="ops-output" class="output-box">绛夊緟鎿嶄綔...</pre>
       </section>
 
       <section class="panel">
-        <h2>账号池</h2>
+        <h2>璐﹀彿姹?/h2>
         <div id="accounts-grid" class="accounts-grid"></div>
       </section>
 
       <section class="panel">
-        <h2>模型列表</h2>
+        <h2>妯″瀷鍒楄〃</h2>
         <div id="models-grid" class="model-grid"></div>
       </section>
 
       <section class="panel panel-wide">
-        <h2>配置快照</h2>
+        <h2>閰嶇疆蹇収</h2>
         <div class="config-wrap">
           <div>
-            <h3>本地配置</h3>
-            <pre id="local-config" class="code-box">加载中...</pre>
+            <h3>鏈湴閰嶇疆</h3>
+            <pre id="local-config" class="code-box">鍔犺浇涓?..</pre>
           </div>
           <div>
-            <h3>运行配置</h3>
-            <pre id="active-config" class="code-box">加载中...</pre>
+            <h3>杩愯閰嶇疆</h3>
+            <pre id="active-config" class="code-box">鍔犺浇涓?..</pre>
           </div>
         </div>
       </section>
 
       <section class="panel panel-wide">
-        <h2>日志尾部</h2>
-        <pre id="logs-box" class="log-box">加载中...</pre>
+        <h2>鏃ュ織灏鹃儴</h2>
+        <pre id="logs-box" class="log-box">鍔犺浇涓?..</pre>
       </section>
     </main>
 
@@ -97,3 +106,6 @@
     <script src="/dashboard/app.js" defer></script>
   </body>
 </html>
+
+
+

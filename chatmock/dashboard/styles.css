@@ -256,6 +256,40 @@ h3 {
   max-height: 220px;
 }
 
+.upload-auth-wrap {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid rgba(103, 180, 170, 0.22);
+  border-radius: 10px;
+  background: rgba(4, 8, 10, 0.52);
+}
+
+.upload-auth-title {
+  margin: 0 0 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--signal);
+}
+
+.upload-auth-input {
+  display: block;
+  width: 100%;
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.upload-auth-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--subtle);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
 .config-wrap {
   display: grid;
   gap: 12px;

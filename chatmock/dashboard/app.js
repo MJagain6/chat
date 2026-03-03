@@ -13,6 +13,8 @@ const nodes = {
   localConfig: $("local-config"),
   activeConfig: $("active-config"),
   logs: $("logs-box"),
+  authFiles: $("auth-files"),
+  authReplace: $("auth-replace"),
   toast: $("toast"),
 };
 
@@ -220,6 +222,43 @@ async function runServiceAction(action) {
   }
 }
 
+async function uploadAuthFiles() {
+  const fileInput = nodes.authFiles;
+  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+    showToast("Please select one or more auth.json files", true);
+    return;
+  }
+
+  const formData = new FormData();
+  Array.from(fileInput.files).forEach((file) => formData.append("files", file));
+  formData.append("replace", nodes.authReplace?.checked ? "1" : "0");
+
+  try {
+    const response = await fetch("/api/actions/upload_auths", {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = payload.error || payload.message || `${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+
+    const lines = [
+      `[upload] uploaded=${payload.uploaded || 0}`,
+      ...(Array.isArray(payload.written) ? payload.written : []),
+      ...(Array.isArray(payload.errors) && payload.errors.length ? ["errors:", ...payload.errors] : []),
+    ];
+    setOutput(lines.join("\n"));
+    fileInput.value = "";
+    await refreshAll();
+    showToast("Credentials uploaded");
+  } catch (error) {
+    setOutput(String(error.message || error));
+    showToast("Upload failed", true);
+  }
+}
+
 function bindActions() {
   $("btn-refresh").addEventListener("click", async () => {
     await refreshAll();
@@ -232,6 +271,10 @@ function bindActions() {
   $("btn-models").addEventListener("click", refreshModels);
   $("btn-logs").addEventListener("click", refreshLogs);
   $("btn-config").addEventListener("click", refreshConfig);
+  const uploadBtn = $("btn-upload-auth");
+  if (uploadBtn) {
+    uploadBtn.addEventListener("click", uploadAuthFiles);
+  }
 }
 
 bindActions();

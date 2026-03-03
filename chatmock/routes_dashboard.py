@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
@@ -59,6 +60,71 @@ def _read_log_tail(path: str, lines: int) -> str:
         return "".join(data[-lines:])
     except Exception as exc:
         return f"failed to read log: {exc}"
+
+
+def _bool_env(name: str, default: bool = True) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _current_auth_files() -> List[str]:
+    raw = (os.getenv("CHATGPT_LOCAL_AUTH_FILES") or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    for item in raw.split(","):
+        path = item.strip()
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def _auth_storage_root() -> Path:
+    explicit = (os.getenv("CHATMOCK_DASHBOARD_AUTH_DIR") or "").strip()
+    if explicit:
+        root = Path(explicit)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    existing = _current_auth_files()
+    if existing:
+        first = Path(existing[0]).expanduser()
+        if first.name == "auth.json":
+            root = first.parent.parent
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+
+    root = Path("/tmp/chatmock-accounts")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_label(raw_name: str, index: int) -> str:
+    stem = Path(raw_name).stem if raw_name else ""
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "", stem).lower()
+    if cleaned.startswith("auth"):
+        cleaned = ""
+    if not cleaned:
+        cleaned = f"acc{index:02d}"
+    return cleaned
+
+
+def _merge_auth_files(existing: List[str], new_files: List[str], replace: bool) -> List[str]:
+    if replace:
+        return list(dict.fromkeys(new_files))
+    merged = list(existing)
+    for path in new_files:
+        if path not in merged:
+            merged.append(path)
+    return merged
+
+
+def _write_auth_payload(target_path: Path, payload: Dict[str, Any]) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(target_path, "w", encoding="utf-8") as fp:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fp.fileno(), 0o600)
+        json.dump(payload, fp, ensure_ascii=False, indent=2)
 
 
 def _service_status() -> Dict[str, Any]:
@@ -209,3 +275,50 @@ def dashboard_action_service():
         )
     except Exception as exc:
         return make_response(jsonify({"ok": False, "error": str(exc)}), 500)
+
+
+@dashboard_bp.post("/api/actions/upload_auths")
+def dashboard_action_upload_auths():
+    if not _bool_env("CHATMOCK_DASHBOARD_ALLOW_UPLOAD", default=True):
+        return make_response(jsonify({"ok": False, "error": "upload is disabled by server config"}), 403)
+
+    replace = str(request.form.get("replace", "0")).strip().lower() in ("1", "true", "yes", "on")
+    incoming = request.files.getlist("files")
+    if not incoming:
+        return make_response(jsonify({"ok": False, "error": "no files uploaded"}), 400)
+
+    auth_root = _auth_storage_root()
+    written: List[str] = []
+    errors: List[str] = []
+
+    for idx, storage in enumerate(incoming, start=1):
+        try:
+            data = storage.read()
+            payload = json.loads(data.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON root must be an object")
+            label = _safe_label(storage.filename or "", idx)
+            target = auth_root / label / "auth.json"
+            _write_auth_payload(target, payload)
+            written.append(str(target))
+        except Exception as exc:
+            errors.append(f"{storage.filename or 'unknown'}: {exc}")
+
+    if not written:
+        return make_response(jsonify({"ok": False, "error": "all files failed", "details": errors}), 400)
+
+    merged = _merge_auth_files(_current_auth_files(), written, replace=replace)
+    os.environ["CHATGPT_LOCAL_AUTH_FILES"] = ",".join(merged)
+
+    records = get_chatgpt_auth_records()
+    return jsonify(
+        {
+            "ok": True,
+            "uploaded": len(written),
+            "written": written,
+            "replace": replace,
+            "auth_files": os.environ.get("CHATGPT_LOCAL_AUTH_FILES", ""),
+            "accounts_count": len(records),
+            "errors": errors,
+        }
+    )
