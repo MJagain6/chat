@@ -141,7 +141,7 @@ function tokenPill(label, ok) {
 function renderAccounts(payload) {
   const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
   if (!accounts.length) {
-    nodes.accounts.innerHTML = `<div class="account-card">鏈彂鐜拌处鍙枫€?/div>`;
+    nodes.accounts.innerHTML = `<div class="account-card">No accounts uploaded</div>`;
     return;
   }
   nodes.accounts.innerHTML = accounts
@@ -152,7 +152,7 @@ function renderAccounts(payload) {
             <div class="account-top">
               <div>
                 <div class="account-file">${acc.label || "unknown"}</div>
-                <div class="account-mail">璇诲彇澶辫触</div>
+                <div class="account-mail">Failed to read account</div>
               </div>
             </div>
             <div class="account-meta"><div>${acc.error}</div></div>
@@ -188,19 +188,19 @@ function renderAccounts(payload) {
 function renderModels(payload) {
   const ids = Array.isArray(payload?.ids) ? payload.ids : [];
   if (!ids.length) {
-    nodes.models.innerHTML = `<span class="model-chip">鏆傛棤妯″瀷鏁版嵁</span>`;
+    nodes.models.innerHTML = `<span class="model-chip">No model data</span>`;
     return;
   }
   nodes.models.innerHTML = ids.map((id) => `<span class="model-chip">${id}</span>`).join("");
 }
 
 function renderConfig(payload) {
-  nodes.localConfig.textContent = payload?.localConfig || "璇诲彇澶辫触";
-  nodes.activeConfig.textContent = payload?.activeConfig || "璇诲彇澶辫触";
+  nodes.localConfig.textContent = payload?.localConfig || "Failed to read";
+  nodes.activeConfig.textContent = payload?.activeConfig || "Failed to read";
 }
 
 function renderLogs(payload) {
-  nodes.logs.textContent = payload?.text || "璇诲彇澶辫触";
+  nodes.logs.textContent = payload?.text || "Failed to read";
 }
 
 function readSettingsForm() {
@@ -351,7 +351,7 @@ async function refreshHealth() {
   const health = await api("/api/health");
   renderHealth(health);
   if (health?.models?.error) {
-    setOutput(`妯″瀷妫€鏌ュけ璐? ${health.models.error}`);
+    setOutput(`Model check failed: ${health.models.error}`);
   }
 }
 
@@ -380,7 +380,7 @@ async function refreshAll() {
   const results = await Promise.allSettled(tasks);
   const rejected = results.filter((item) => item.status === "rejected");
   if (rejected.length) {
-    const message = rejected[0]?.reason?.message || "閮ㄥ垎鍒锋柊澶辫触";
+    const message = rejected[0]?.reason?.message || "Partial refresh failed";
     showToast(message, true);
   }
 }
@@ -414,10 +414,10 @@ async function runServiceAction(action) {
       renderHealth(payload.health);
     }
     await refreshModels();
-    showToast(`鏈嶅姟鎿嶄綔瀹屾垚: ${action}`);
+    showToast(`Service action completed: ${action}`);
   } catch (error) {
     setOutput(String(error.message || error));
-    showToast(`鏈嶅姟鎿嶄綔澶辫触: ${action}`, true);
+    showToast(`Service action failed: ${action}`, true);
   }
 }
 
