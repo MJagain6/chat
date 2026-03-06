@@ -444,11 +444,23 @@ async function uploadAuthFiles() {
     }
 
     const lines = [
-      `[upload] uploaded=${payload.uploaded || 0}`,
+      `[upload] uploaded=${payload.uploaded || 0} created=${payload.created || 0} updated=${payload.updated || 0}`,
       Number(payload?.service?.status?.instanceCount || 0) > 0
         ? `fast instances: ${payload.service.status.instanceCount} active=${payload.service.status.activeCount || 0}`
         : "",
-      ...(Array.isArray(payload.written) ? payload.written : []),
+      ...(Array.isArray(payload.results)
+        ? payload.results.map((item) => {
+            const action = item?.action || "created";
+            const accountId = item?.accountId || "unknown";
+            const target = item?.target || "";
+            if (action === "updated") {
+              return `[updated] ${item?.filename || "unknown"} -> ${target} (same account_id: ${accountId})`;
+            }
+            return `[created] ${item?.filename || "unknown"} -> ${target} (account_id: ${accountId})`;
+          })
+        : Array.isArray(payload.written)
+          ? payload.written
+          : []),
       ...(Array.isArray(payload.errors) && payload.errors.length ? ["errors:", ...payload.errors] : []),
     ];
     setOutput(lines.join("\n"));

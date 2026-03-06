@@ -638,6 +638,7 @@ def dashboard_action_upload_auths():
     auth_root = _auth_storage_root()
     written: List[str] = []
     errors: List[str] = []
+    upload_results: List[Dict[str, Any]] = []
     primary_payload: Dict[str, Any] | None = None
 
     existing_files = [] if replace else _current_auth_files()
@@ -664,9 +665,13 @@ def dashboard_action_upload_auths():
 
             account_id = _extract_account_id(payload)
             target: Optional[Path] = None
+            action = "created"
+            previous_path = ""
 
             if not replace and account_id and account_id in account_to_path:
                 target = Path(account_to_path[account_id])
+                action = "updated"
+                previous_path = str(target)
             else:
                 label = _next_acc_label(used_labels)
                 used_labels.add(label)
@@ -676,6 +681,15 @@ def dashboard_action_upload_auths():
 
             _write_auth_payload(target, payload)
             written.append(str(target))
+            upload_results.append(
+                {
+                    "filename": storage.filename or "unknown",
+                    "accountId": account_id,
+                    "action": action,
+                    "target": str(target),
+                    "previousTarget": previous_path,
+                }
+            )
             if primary_payload is None:
                 primary_payload = payload
         except Exception as exc:
@@ -709,6 +723,9 @@ def dashboard_action_upload_auths():
             "ok": True,
             "uploaded": len(written),
             "written": written,
+            "results": upload_results,
+            "created": sum(1 for item in upload_results if item.get("action") == "created"),
+            "updated": sum(1 for item in upload_results if item.get("action") == "updated"),
             "replace": replace,
             "auth_files": os.environ.get("CHATGPT_LOCAL_AUTH_FILES", ""),
             "accounts_count": len(records),
