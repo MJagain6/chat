@@ -63,72 +63,45 @@ Then, you can simply use the address and port as the baseURL as you require (htt
 
 **Reminder:** When setting a baseURL in other applications, make you sure you include /v1/ at the end of the URL if you're using this as a OpenAI compatible endpoint (e.g http://127.0.0.1:8000/v1)
 
-### Multi-account round-robin (single ChatMock process)
-
-ChatMock can rotate across multiple ChatGPT accounts from one running server.
-
-1. Prepare multiple `auth.json` files (one per account).
-2. Set `CHATGPT_LOCAL_AUTH_FILES` to a comma-separated list of those files.
-3. Start `serve` as usual.
-
-Example:
-
-```bash
-CHATGPT_LOCAL_AUTH_FILES=/data/acc1/auth.json,/data/acc2/auth.json python chatmock.py serve
-```
-
-Behavior:
-- Round-robin account selection per request.
-- Automatic failover to the next account on `401/403/429/5xx`.
-- Request-level retry rounds (`CHATGPT_LOCAL_REQUEST_RETRY`, default `3`).
-- Exponential backoff between rounds with cooldown (`CHATGPT_LOCAL_MAX_RETRY_INTERVAL`, default `30s`).
-- Routing strategy configurable by `CHATGPT_LOCAL_ROUTING_STRATEGY=round-robin|random|first`.
-- Backward compatible with single-account mode when `CHATGPT_LOCAL_AUTH_FILES` is unset.
-
-### Built-in Dashboard
-
-ChatMock now includes a web dashboard inspired by the openclaw control panel.
-
-- URL: `http://127.0.0.1:8000/dashboard`
-- APIs: `/api/health`, `/api/accounts`, `/api/models`, `/api/config`, `/api/logs`
-
-Optional env vars:
-- `CHATMOCK_DASHBOARD_LOG_PATH`: log file path used by `/api/logs`
-- `CHATMOCK_SERVICE_NAME`: if set, enables service start/stop/restart buttons via `systemctl`
-- `CHATMOCK_DASHBOARD_ALLOW_UPLOAD`: set `0` to disable dashboard credential upload API
-- `CHATMOCK_DASHBOARD_AUTH_DIR`: where uploaded `auth.json` files are stored (default `/tmp/chatmock-accounts`)
-
 ### Docker
 
 Read [the docker instrunctions here](https://github.com/RayBytes/ChatMock/blob/main/DOCKER.md)
 
-### Render (cloud deploy)
+### Render
 
-You can deploy ChatMock to Render as a Python web service.
+This repo now includes a Render-ready Docker deployment for the official Codex app-server path:
 
-1. Push this repo to GitHub.
-2. In Render, create a **Web Service** from your repo.
-3. Render will detect `render.yaml` automatically (or set manually):
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `bash scripts/render-start.sh`
-4. Add env vars in Render:
-   - `CHATMOCK_AUTH_JSONS_BASE64` (recommended, multi-account)
-   - Optional proxy vars if needed: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`
+- [`render.yaml`](./render.yaml) defines a Docker web service with a persistent disk.
+- [`scripts/render-start.sh`](./scripts/render-start.sh) boots ChatMock first, with an in-process Codex app-server manager.
 
-#### Build `CHATMOCK_AUTH_JSONS_BASE64` from local auth files
+You can still pre-seed credentials through secrets:
 
-Run this locally in your ChatMock folder (PowerShell):
+- `CODEX_AUTH_B64` or `CODEX_AUTH_JSON` or `CODEX_AUTH_JSON_FILE`
 
-```powershell
-python -c "import base64, pathlib; files=['acc01/auth.json','acc03/auth.json','acc04/auth.json','acc05/auth.json']; print(','.join(base64.b64encode(pathlib.Path(f).read_bytes()).decode() for f in files))"
-```
+Optional runtime secret:
 
-Copy the output string into Render env var `CHATMOCK_AUTH_JSONS_BASE64`.
+- `CODEX_CONFIG_B64` or `CODEX_CONFIG_TOML` or `CODEX_CONFIG_TOML_FILE`
 
-After deploy, your endpoint is:
+Recommended Render env:
 
-- Base URL: `https://<your-render-service>.onrender.com/v1`
-- API key: any non-empty string
+- `CHATMOCK_DATA_DIR=/app/storage`
+- `CODEX_HOME=/app/storage/.codex`
+- `CHATGPT_LOCAL_UPSTREAM=codex-app-server`
+- `CHATGPT_LOCAL_CODEX_APP_SERVER_URL=ws://127.0.0.1:8787`
+- `CHATGPT_LOCAL_EXPOSE_REASONING_MODELS=true`
+- `CHATMOCK_MANAGE_CODEX_APP_SERVER=true`
+- `CHATMOCK_AUTO_START_CODEX_APP_SERVER=true`
+- `CHATMOCK_DASHBOARD_ALLOW_UPLOAD=true`
+
+Current recommended workflow on Render:
+
+1. Deploy the service even if no `auth.json` is present yet.
+2. Open `/dashboard`.
+3. Upload one or more `auth.json` files.
+4. Uploaded credentials are written into the dashboard account pool and each one starts a managed Codex app-server fast instance.
+5. The same uploaded credentials are also preserved in the multi-account pool (`CHATGPT_LOCAL_AUTH_FILES`) for backend rotation.
+
+If your Git repo root is not this folder, either move `render.yaml` to the repo root or select this file path explicitly in Render when syncing the Blueprint.
 
 # Examples
 
@@ -179,6 +152,8 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 - `gpt-5`
 - `gpt-5.1`
 - `gpt-5.2`
+- `gpt-5.4`
+- `gpt-5.4-fast` (ChatMock alias, requires `codex-app-server` upstream for real fast mode)
 - `gpt-5-codex`
 - `gpt-5.2-codex`
 - `gpt-5.3-codex`
@@ -188,6 +163,19 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 - `codex-mini`
 
 # Customisation / Configuration
+
+### Upstream mode
+
+- `--upstream` (choice of `chatgpt-backend`, `codex-app-server`)<br>
+ChatMock supports two upstream modes:
+
+  - `chatgpt-backend` (default): direct bridge to the private ChatGPT/Codex backend.
+  - `codex-app-server`: bridge to an official local `codex app-server` instance over WebSocket.
+
+Use `codex-app-server` if you want the official Codex client protocol, including real `serviceTier:"fast"` support for GPT-5.4 fast aliases.
+
+- `--codex-app-server-url`<br>
+WebSocket URL for the Codex app-server upstream. The default is `ws://127.0.0.1:8787`.
 
 ### Thinking effort
 
@@ -209,6 +197,63 @@ You can enable it by starting the server with this parameter, which will allow O
 `responses_tools`: supports `[{"type":"web_search"}]` / `{ "type": "web_search_preview" }`<br>
 `responses_tool_choice`: `"auto"` or `"none"`
 
+### Service tier / fast mode
+
+- `--service-tier`<br>
+This forwards service tier requests to the selected upstream. The exact values depend on the upstream mode:
+
+  - `chatgpt-backend`: use `priority` to probe the backend fast/priority path. This is best-effort only, and the backend may still downgrade the request to `default`.
+  - `codex-app-server`: use `fast` or `flex`, which map to the official Codex app-server `serviceTier` field.
+
+This is separate from reasoning effort: lowering reasoning makes the model think less, while service tier asks the upstream to use a different processing mode.
+
+ChatMock also supports a real fast alias for model pickers:
+
+- `gpt-5.4-fast` -> upstream `gpt-5.4` + fast service tier
+- `gpt-5.4-fast-low|medium|high|xhigh` -> upstream `gpt-5.4` + fast service tier + matching `reasoning.effort`
+
+If a request explicitly sets `service_tier`, that explicit value overrides the alias.
+
+You can also send it per request:
+
+```json
+{
+  "model": "gpt-5.4",
+  "service_tier": "fast",
+  "messages": [{"role":"user","content":"Say ok"}]
+}
+```
+
+If the upstream accepts it, non-stream responses include a top-level `service_tier` field and ChatMock also returns:
+
+- `X-ChatMock-Service-Tier-Requested`
+- `X-ChatMock-Service-Tier-Observed` (when the upstream reports one)
+
+### Local true-fast validation
+
+To validate real GPT-5.4 fast mode locally, run the official Codex app-server and then point ChatMock at it:
+
+1. Start the Codex app-server:
+```bash
+codex app-server --listen ws://127.0.0.1:8787 --enable fast_mode
+```
+
+2. Start ChatMock against that upstream:
+```bash
+python chatmock.py serve --upstream codex-app-server --codex-app-server-url ws://127.0.0.1:8787 --expose-reasoning-models
+```
+
+3. Send a test request with `gpt-5.4-fast-low` (or another `gpt-5.4-fast-*` alias). A successful non-stream response should include:
+
+```json
+{
+  "model": "gpt-5.4-fast-low",
+  "service_tier": "fast"
+}
+```
+
+Current behavior: the `codex-app-server` adapter is validated for standard text chat, streaming, OpenAI-style function calling (`tool_calls` + follow-up `tool` messages), native image inputs on the latest user turn, and native Codex `web_search` passthrough. Anthropic-compatible `/v1/messages` is also available on top of the same upstream. Legacy multi-account rotation is still available for the `chatgpt-backend` upstream path and through the dashboard account pool.
+
 #### Example usage
 ```json
 {
@@ -226,7 +271,7 @@ You can enable it by starting the server with this parameter, which will allow O
 If your preferred app doesn’t support selecting reasoning effort, or you just want a simpler approach, this parameter exposes each reasoning level as a separate, queryable model. Each reasoning level also appears individually under ⁠/v1/models, so model pickers in your favorite chat apps will list all reasoning options as distinct models you can switch between.
 
 ## Notes
-If you wish to have the fastest responses, I'd recommend setting `--reasoning-effort` to low, and `--reasoning-summary` to none. <br>
+If you want the official fast path locally, use `--upstream codex-app-server` and a `gpt-5.4-fast-*` alias (or `service_tier=fast`). If you only want less thinking overhead, lower `--reasoning-effort` separately. <br>
 All parameters and choices can be seen by sending `python chatmock.py serve --h`<br>
 The context size of this route is also larger than what you get access to in the regular ChatGPT app.<br>
 
@@ -236,3 +281,4 @@ When the model returns a thinking summary, the model will send back thinking tag
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=RayBytes/ChatMock&type=Timeline)](https://www.star-history.com/#RayBytes/ChatMock&Timeline)
+

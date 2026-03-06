@@ -4,7 +4,6 @@ import datetime
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +14,7 @@ from .utils import (
     get_max_retry_interval_seconds,
     parse_jwt_claims,
     get_request_retry_limit,
+    write_auth_file,
 )
 
 
@@ -32,6 +32,8 @@ def _model_ids(expose_variants: bool) -> List[str]:
         ("gpt-5", ["high", "medium", "low", "minimal"]),
         ("gpt-5.1", ["high", "medium", "low"]),
         ("gpt-5.2", ["xhigh", "high", "medium", "low"]),
+        ("gpt-5.4", ["xhigh", "high", "medium", "low"]),
+        ("gpt-5.4-fast", ["xhigh", "high", "medium", "low"]),
         ("gpt-5.3-codex", ["xhigh", "high", "medium", "low"]),
         ("gpt-5-codex", ["high", "medium", "low"]),
         ("gpt-5.2-codex", ["xhigh", "high", "medium", "low"]),
@@ -135,6 +137,12 @@ def _auth_storage_root() -> Path:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
+    data_dir = (os.getenv("CHATMOCK_DATA_DIR") or "").strip()
+    if data_dir:
+        root = Path(data_dir).expanduser() / "accounts"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     existing = _current_auth_files()
     if existing:
         first = Path(existing[0]).expanduser()
@@ -146,6 +154,10 @@ def _auth_storage_root() -> Path:
     root = Path("/tmp/chatmock-accounts")
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _runtime_codex_manager():
+    return current_app.config.get("CODEX_APP_SERVER_MANAGER")
 
 
 def _settings_path() -> Path:
@@ -419,23 +431,23 @@ def _read_auth_payload(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _service_status() -> Dict[str, Any]:
-    service_name = (os.getenv("CHATMOCK_SERVICE_NAME") or "").strip()
-    if not service_name:
-        return {"name": "", "status": "running", "raw": "running in foreground/no service configured"}
-    try:
-        completed = subprocess.run(
-            ["systemctl", "is-active", service_name],
-            capture_output=True,
-            text=True,
-            timeout=12,
-            check=False,
-        )
-        status = (completed.stdout or completed.stderr or "unknown").strip()
-        if not status:
-            status = "unknown"
-        return {"name": service_name, "status": status, "raw": status}
-    except Exception as exc:
-        return {"name": service_name, "status": "error", "raw": str(exc)}
+    manager = _runtime_codex_manager()
+    if manager is not None:
+        return manager.status()
+    return {"status": "unmanaged", "managed": False, "listening": False}
+
+
+def _fast_instance_map() -> Dict[str, Dict[str, Any]]:
+    service = _service_status()
+    instances = service.get("instances") if isinstance(service.get("instances"), list) else []
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in instances:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        if label:
+            out[label] = item
+    return out
 
 
 @dashboard_bp.get("/dashboard")
@@ -458,10 +470,11 @@ def dashboard_css():
 def dashboard_health():
     records = get_chatgpt_auth_records()
     models = _model_ids(bool(current_app.config.get("EXPOSE_REASONING_MODELS")))
+    service = _service_status()
     payload = {
         "now": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "service": _service_status(),
-        "listening": True,
+        "service": service,
+        "listening": bool(service.get("listening")),
         "models": {"count": len(models), "ids": models, "error": ""},
         "accounts": {"count": len(records)},
         "routing": {
@@ -476,6 +489,21 @@ def dashboard_health():
 @dashboard_bp.get("/api/accounts")
 def dashboard_accounts():
     records = get_chatgpt_auth_records()
+    instance_map = _fast_instance_map()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        source = str(record.get("source") or "")
+        parent_label = Path(source).parent.name.strip() if source else ""
+        instance = instance_map.get(parent_label) if parent_label else None
+        if isinstance(instance, dict):
+            record["fast_status"] = instance.get("status")
+            record["fast_port"] = instance.get("port")
+            record["fast_url"] = instance.get("url")
+            record["fast_pid"] = instance.get("pid")
+            record["fast_cooldown_remaining"] = instance.get("cooldownRemaining")
+            record["fast_request_count"] = instance.get("requestCount")
+            record["fast_request_successes"] = instance.get("requestSuccesses")
     return jsonify({"count": len(records), "accounts": records})
 
 
@@ -488,6 +516,7 @@ def dashboard_models():
 @dashboard_bp.get("/api/config")
 def dashboard_config():
     settings = _current_settings_snapshot()
+    service = _service_status()
     local = {
         "CHATGPT_LOCAL_HOME": os.getenv("CHATGPT_LOCAL_HOME", ""),
         "CHATGPT_LOCAL_AUTH_FILES": os.getenv("CHATGPT_LOCAL_AUTH_FILES", ""),
@@ -506,6 +535,12 @@ def dashboard_config():
         "ALL_PROXY": settings["allProxy"],
         "NO_PROXY": settings["noProxy"],
         "CHATMOCK_DASHBOARD_SETTINGS_PATH": str(_settings_path()),
+        "CHATMOCK_DATA_DIR": os.getenv("CHATMOCK_DATA_DIR", ""),
+        "CHATMOCK_MANAGE_CODEX_APP_SERVER": os.getenv("CHATMOCK_MANAGE_CODEX_APP_SERVER", ""),
+        "CHATGPT_LOCAL_UPSTREAM": os.getenv("CHATGPT_LOCAL_UPSTREAM", ""),
+        "CHATGPT_LOCAL_CODEX_APP_SERVER_URL": os.getenv("CHATGPT_LOCAL_CODEX_APP_SERVER_URL", ""),
+        "CODEX_HOME": os.getenv("CODEX_HOME", ""),
+        "service": service,
     }
     return jsonify(
         {
@@ -548,6 +583,12 @@ def dashboard_logs():
     lines = max(20, min(lines, 1000))
     log_path = _default_log_path()
     text = _read_log_tail(log_path, lines)
+    manager = _runtime_codex_manager()
+    if manager is not None:
+        manager_logs = manager.tail_logs(lines=lines)
+        if manager_logs:
+            combined = [f"[chatmock log] {log_path}", text, "", "[codex app-server]", manager_logs]
+            text = "\n".join(part for part in combined if isinstance(part, str) and part)
     return jsonify({"lines": lines, "logPath": log_path, "text": text})
 
 
@@ -562,36 +603,21 @@ def dashboard_action_service():
     action = str((request.get_json(silent=True) or {}).get("action") or "").strip().lower()
     if action not in ("start", "stop", "restart"):
         return make_response(jsonify({"error": "action must be one of start|stop|restart"}), 400)
-
-    service_name = (os.getenv("CHATMOCK_SERVICE_NAME") or "").strip()
-    if not service_name:
-        return make_response(
-            jsonify(
-                {
-                    "ok": False,
-                    "error": "CHATMOCK_SERVICE_NAME is not set; service action unavailable.",
-                }
-            ),
-            400,
-        )
+    manager = _runtime_codex_manager()
+    if manager is None:
+        return make_response(jsonify({"ok": False, "error": "codex app-server manager is unavailable"}), 400)
 
     try:
-        completed = subprocess.run(
-            ["systemctl", action, service_name],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        result = getattr(manager, action)()
         health = dashboard_health().get_json()
         return jsonify(
             {
-                "ok": completed.returncode == 0,
+                "ok": bool(result.get("ok")),
                 "action": action,
-                "manager": "systemd",
-                "service": service_name,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
+                "manager": "codex-app-server",
+                "stdout": result.get("message", ""),
+                "stderr": result.get("error", ""),
+                "status": result.get("status"),
                 "health": health,
             }
         )
@@ -612,6 +638,7 @@ def dashboard_action_upload_auths():
     auth_root = _auth_storage_root()
     written: List[str] = []
     errors: List[str] = []
+    primary_payload: Dict[str, Any] | None = None
 
     existing_files = [] if replace else _current_auth_files()
     used_labels: set[str] = set()
@@ -649,6 +676,8 @@ def dashboard_action_upload_auths():
 
             _write_auth_payload(target, payload)
             written.append(str(target))
+            if primary_payload is None:
+                primary_payload = payload
         except Exception as exc:
             errors.append(f"{storage.filename or 'unknown'}: {exc}")
 
@@ -663,6 +692,16 @@ def dashboard_action_upload_auths():
         },
         persist=True,
     )
+    if primary_payload is not None:
+        write_auth_file(primary_payload)
+
+    service_result: Dict[str, Any] | None = None
+    manager = _runtime_codex_manager()
+    if manager is not None:
+        try:
+            service_result = manager.sync_from_auth_files(saved["authFiles"], restart=True)
+        except Exception as exc:
+            service_result = {"ok": False, "error": str(exc), "status": _service_status()}
 
     records = get_chatgpt_auth_records()
     return jsonify(
@@ -676,5 +715,6 @@ def dashboard_action_upload_auths():
             "errors": errors,
             "settingsPath": str(_settings_path()),
             "savedSettings": saved,
+            "service": service_result,
         }
     )

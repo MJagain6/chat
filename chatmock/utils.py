@@ -15,6 +15,7 @@ import requests
 
 from .config import CLIENT_ID_DEFAULT, OAUTH_TOKEN_URL
 
+
 _AUTH_POOL_RR_LOCK = threading.Lock()
 _AUTH_POOL_RR_INDEX = 0
 _AUTH_POOL_STATE_LOCK = threading.Lock()
@@ -34,12 +35,18 @@ def get_home_dir() -> str:
 
 def _candidate_auth_bases() -> List[str]:
     bases: List[str] = []
-    for base in [
+    explicit_bases = [
         os.getenv("CHATGPT_LOCAL_HOME"),
         os.getenv("CODEX_HOME"),
-        os.path.expanduser("~/.chatgpt-local"),
-        os.path.expanduser("~/.codex"),
-    ]:
+    ]
+    if any(isinstance(base, str) and base for base in explicit_bases):
+        source_bases = explicit_bases
+    else:
+        source_bases = [
+            os.path.expanduser("~/.chatgpt-local"),
+            os.path.expanduser("~/.codex"),
+        ]
+    for base in source_bases:
         if not isinstance(base, str) or not base:
             continue
         if base not in bases:
@@ -399,6 +406,114 @@ def _candidate_from_auth_obj(
     )
 
 
+def _should_refresh_access_token(access_token: Optional[str], last_refresh: Any) -> bool:
+    if not isinstance(access_token, str) or not access_token:
+        return True
+
+    claims = parse_jwt_claims(access_token) or {}
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if isinstance(exp, (int, float)):
+        try:
+            expiry = datetime.datetime.fromtimestamp(float(exp), datetime.timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            expiry = None
+        if expiry is not None:
+            return expiry <= now + datetime.timedelta(minutes=5)
+
+    if isinstance(last_refresh, str):
+        refreshed_at = _parse_iso8601(last_refresh)
+        if refreshed_at is not None:
+            return refreshed_at <= now - datetime.timedelta(minutes=55)
+    return False
+
+
+def _refresh_chatgpt_tokens(refresh_token: str, client_id: str) -> Optional[Dict[str, Optional[str]]]:
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "scope": "openid profile email offline_access",
+    }
+
+    try:
+        resp = requests.post(OAUTH_TOKEN_URL, json=payload, timeout=30)
+    except requests.RequestException as exc:
+        eprint(f"ERROR: failed to refresh ChatGPT token: {exc}")
+        return None
+
+    if resp.status_code >= 400:
+        eprint(f"ERROR: refresh token request returned status {resp.status_code}")
+        return None
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        eprint(f"ERROR: unable to parse refresh token response: {exc}")
+        return None
+
+    id_token = data.get("id_token")
+    access_token = data.get("access_token")
+    new_refresh_token = data.get("refresh_token") or refresh_token
+    if not isinstance(id_token, str) or not isinstance(access_token, str):
+        eprint("ERROR: refresh token response missing expected tokens")
+        return None
+
+    account_id = _derive_account_id(id_token)
+    new_refresh_token = new_refresh_token if isinstance(new_refresh_token, str) and new_refresh_token else refresh_token
+    return {
+        "id_token": id_token,
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "account_id": account_id,
+    }
+
+
+def _persist_refreshed_auth(auth: Dict[str, Any], updated_tokens: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    updated_auth = dict(auth)
+    updated_auth["tokens"] = updated_tokens
+    updated_auth["last_refresh"] = _now_iso8601()
+    if write_auth_file(updated_auth):
+        return updated_auth, updated_tokens
+    eprint("ERROR: unable to persist refreshed auth tokens")
+    return None
+
+
+def _derive_account_id(id_token: Optional[str]) -> Optional[str]:
+    if not isinstance(id_token, str) or not id_token:
+        return None
+    claims = parse_jwt_claims(id_token) or {}
+    auth_claims = claims.get("https://api.openai.com/auth") if isinstance(claims, dict) else None
+    if isinstance(auth_claims, dict):
+        account_id = auth_claims.get("chatgpt_account_id")
+        if isinstance(account_id, str) and account_id:
+            return account_id
+    return None
+
+
+def _parse_iso8601(value: str) -> Optional[datetime.datetime]:
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def _now_iso8601() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def get_effective_chatgpt_auth() -> tuple[str | None, str | None]:
+    access_token, account_id, id_token = load_chatgpt_tokens()
+    if not account_id:
+        account_id = _derive_account_id(id_token)
+    return access_token, account_id
+
+
 def _ordered_candidates_round_robin(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
     if len(candidates) <= 1:
         return candidates
@@ -563,10 +678,15 @@ def _auth_record_from_obj(
     if not isinstance(account_id, str) or not account_id:
         account_id = _derive_account_id(id_token)
     state = _state_for_label(label)
+    id_claims = parse_jwt_claims(id_token) or {}
+    access_claims = parse_jwt_claims(access_token) or {}
+    plan_raw = (access_claims.get("https://api.openai.com/auth") or {}).get("chatgpt_plan_type") or ""
     return {
         "label": label,
         "source": source,
         "account_id": _compact_account_id(account_id),
+        "email": id_claims.get("email") or id_claims.get("preferred_username") or "",
+        "plan": str(plan_raw).lower() if isinstance(plan_raw, str) else "",
         "last_refresh": last_refresh if isinstance(last_refresh, str) else "",
         "has_access_token": bool(isinstance(access_token, str) and access_token),
         "has_refresh_token": bool(isinstance(refresh_token, str) and refresh_token),
@@ -605,32 +725,20 @@ def get_chatgpt_auth_records() -> List[Dict[str, Any]]:
         for idx, account_obj in enumerate(accounts):
             label = ""
             for key in ("name", "alias", "label"):
-                v = account_obj.get(key)
-                if isinstance(v, str) and v.strip():
-                    label = v.strip()
+                value = account_obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    label = value.strip()
                     break
             if not label:
                 label = f"pool-{idx + 1}"
-            records.append(
-                _auth_record_from_obj(
-                    account_obj,
-                    label=label,
-                    source=f"{pool_path}#{idx + 1}",
-                )
-            )
+            records.append(_auth_record_from_obj(account_obj, label=label, source=f"{pool_path}#{idx + 1}"))
         if records:
             return records
 
     default_path = _find_auth_file_path("auth.json")
     default_auth = read_auth_file()
     if isinstance(default_auth, dict):
-        records.append(
-            _auth_record_from_obj(
-                default_auth,
-                label="default",
-                source=default_path or "auth.json",
-            )
-        )
+        records.append(_auth_record_from_obj(default_auth, label="default", source=default_path or "auth.json"))
     return records
 
 
@@ -693,9 +801,9 @@ def _load_auth_candidates_from_pool_file(ensure_fresh: bool = True) -> List[Dict
     for idx, account_obj in enumerate(accounts):
         label = ""
         for key in ("name", "alias", "label"):
-            v = account_obj.get(key)
-            if isinstance(v, str) and v.strip():
-                label = v.strip()
+            value = account_obj.get(key)
+            if isinstance(value, str) and value.strip():
+                label = value.strip()
                 break
         if not label:
             label = f"pool-{idx + 1}"
@@ -723,115 +831,6 @@ def get_effective_chatgpt_auth_candidates(ensure_fresh: bool = True) -> List[Dic
     return _ordered_candidates_by_strategy(candidates)
 
 
-def _should_refresh_access_token(access_token: Optional[str], last_refresh: Any) -> bool:
-    if not isinstance(access_token, str) or not access_token:
-        return True
-
-    claims = parse_jwt_claims(access_token) or {}
-    exp = claims.get("exp") if isinstance(claims, dict) else None
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if isinstance(exp, (int, float)):
-        try:
-            expiry = datetime.datetime.fromtimestamp(float(exp), datetime.timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            expiry = None
-        if expiry is not None:
-            return expiry <= now + datetime.timedelta(minutes=5)
-
-    if isinstance(last_refresh, str):
-        refreshed_at = _parse_iso8601(last_refresh)
-        if refreshed_at is not None:
-            return refreshed_at <= now - datetime.timedelta(minutes=55)
-    return False
-
-
-def _refresh_chatgpt_tokens(refresh_token: str, client_id: str) -> Optional[Dict[str, Optional[str]]]:
-    payload = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-        "scope": "openid profile email offline_access",
-    }
-
-    try:
-        resp = requests.post(OAUTH_TOKEN_URL, json=payload, timeout=30)
-    except requests.RequestException as exc:
-        eprint(f"ERROR: failed to refresh ChatGPT token: {exc}")
-        return None
-
-    if resp.status_code >= 400:
-        eprint(f"ERROR: refresh token request returned status {resp.status_code}")
-        return None
-
-    try:
-        data = resp.json()
-    except ValueError as exc:
-        eprint(f"ERROR: unable to parse refresh token response: {exc}")
-        return None
-
-    id_token = data.get("id_token")
-    access_token = data.get("access_token")
-    new_refresh_token = data.get("refresh_token") or refresh_token
-    if not isinstance(id_token, str) or not isinstance(access_token, str):
-        eprint("ERROR: refresh token response missing expected tokens")
-        return None
-
-    account_id = _derive_account_id(id_token)
-    new_refresh_token = new_refresh_token if isinstance(new_refresh_token, str) and new_refresh_token else refresh_token
-    return {
-        "id_token": id_token,
-        "access_token": access_token,
-        "refresh_token": new_refresh_token,
-        "account_id": account_id,
-    }
-
-
-def _persist_refreshed_auth(auth: Dict[str, Any], updated_tokens: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
-    updated_auth = dict(auth)
-    updated_auth["tokens"] = updated_tokens
-    updated_auth["last_refresh"] = _now_iso8601()
-    if write_auth_file(updated_auth):
-        return updated_auth, updated_tokens
-    eprint("ERROR: unable to persist refreshed auth tokens")
-    return None
-
-
-def _derive_account_id(id_token: Optional[str]) -> Optional[str]:
-    if not isinstance(id_token, str) or not id_token:
-        return None
-    claims = parse_jwt_claims(id_token) or {}
-    auth_claims = claims.get("https://api.openai.com/auth") if isinstance(claims, dict) else None
-    if isinstance(auth_claims, dict):
-        account_id = auth_claims.get("chatgpt_account_id")
-        if isinstance(account_id, str) and account_id:
-            return account_id
-    return None
-
-
-def _parse_iso8601(value: str) -> Optional[datetime.datetime]:
-    try:
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        dt = datetime.datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
-        return dt.astimezone(datetime.timezone.utc)
-    except Exception:
-        return None
-
-
-def _now_iso8601() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def get_effective_chatgpt_auth() -> tuple[str | None, str | None]:
-    candidates = get_effective_chatgpt_auth_candidates(ensure_fresh=True)
-    if not candidates:
-        return None, None
-    first = candidates[0]
-    return first.get("access_token"), first.get("account_id")
-
-
 def sse_translate_chat(
     upstream,
     model: str,
@@ -848,6 +847,7 @@ def sse_translate_chat(
     think_closed = False
     saw_output = False
     sent_stop_chunk = False
+    sent_tool_finish = False
     saw_any_summary = False
     pending_summary_paragraph = False
     upstream_usage = None
@@ -936,79 +936,7 @@ def sse_translate_chat(
                 response_id = evt["response"].get("id") or response_id
 
             if isinstance(kind, str) and ("web_search_call" in kind):
-                try:
-                    call_id = evt.get("item_id") or "ws_call"
-                    if verbose and vlog:
-                        try:
-                            vlog(f"CM_TOOLS {kind} id={call_id} -> tool_calls(web_search)")
-                        except Exception:
-                            pass
-                    item = evt.get('item') if isinstance(evt.get('item'), dict) else {}
-                    params_dict = ws_state.setdefault(call_id, {}) if isinstance(ws_state.get(call_id), dict) else {}
-                    def _merge_from(src):
-                        if not isinstance(src, dict):
-                            return
-                        for whole in ('parameters','args','arguments','input'):
-                            if isinstance(src.get(whole), dict):
-                                params_dict.update(src.get(whole))
-                        if isinstance(src.get('query'), str): params_dict.setdefault('query', src.get('query'))
-                        if isinstance(src.get('q'), str): params_dict.setdefault('query', src.get('q'))
-                        for rk in ('recency','time_range','days'):
-                            if src.get(rk) is not None and rk not in params_dict: params_dict[rk] = src.get(rk)
-                        for dk in ('domains','include_domains','include'):
-                            if isinstance(src.get(dk), list) and 'domains' not in params_dict: params_dict['domains'] = src.get(dk)
-                        for mk in ('max_results','topn','limit'):
-                            if src.get(mk) is not None and 'max_results' not in params_dict: params_dict['max_results'] = src.get(mk)
-                    _merge_from(item)
-                    _merge_from(evt if isinstance(evt, dict) else None)
-                    params = params_dict if params_dict else None
-                    if isinstance(params, dict):
-                        try:
-                            ws_state.setdefault(call_id, {}).update(params)
-                        except Exception:
-                            pass
-                    eff_params = ws_state.get(call_id, params if isinstance(params, (dict, list, str)) else {})
-                    args_str = _serialize_tool_args(eff_params)
-                    if call_id not in ws_index:
-                        ws_index[call_id] = ws_next_index
-                        ws_next_index += 1
-                    _idx = ws_index.get(call_id, 0)
-                    delta_chunk = {
-                        "id": response_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {
-                                    "tool_calls": [
-                                        {
-                                            "index": _idx,
-                                            "id": call_id,
-                                            "type": "function",
-                                            "function": {"name": "web_search", "arguments": args_str},
-                                        }
-                                    ]
-                                },
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {json.dumps(delta_chunk)}\n\n".encode("utf-8")
-                    if kind.endswith(".completed") or kind.endswith(".done"):
-                        finish_chunk = {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [
-                                {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
-                            ],
-                        }
-                        yield f"data: {json.dumps(finish_chunk)}\n\n".encode("utf-8")
-                except Exception:
-                    pass
+                continue
 
             if kind == "response.output_text.delta":
                 delta = evt.get("delta") or ""
@@ -1034,10 +962,10 @@ def sse_translate_chat(
                 yield f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
             elif kind == "response.output_item.done":
                 item = evt.get("item") or {}
-                if isinstance(item, dict) and (item.get("type") == "function_call" or item.get("type") == "web_search_call"):
+                if isinstance(item, dict) and item.get("type") == "function_call":
                     call_id = item.get("call_id") or item.get("id") or ""
-                    name = item.get("name") or ("web_search" if item.get("type") == "web_search_call" else "")
-                    raw_args = item.get("arguments") or item.get("parameters")
+                    name = item.get("name") or ""
+                    raw_args = item.get("arguments")
                     if isinstance(raw_args, dict):
                         try:
                             ws_state.setdefault(call_id, {}).update(raw_args)
@@ -1048,11 +976,6 @@ def sse_translate_chat(
                         args = _serialize_tool_args(eff_args)
                     except Exception:
                         args = "{}"
-                    if item.get("type") == "web_search_call" and verbose and vlog:
-                        try:
-                            vlog(f"CM_TOOLS response.output_item.done web_search_call id={call_id} has_args={bool(args)}")
-                        except Exception:
-                            pass
                     if call_id not in ws_index:
                         ws_index[call_id] = ws_next_index
                         ws_next_index += 1
@@ -1090,6 +1013,8 @@ def sse_translate_chat(
                             "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
                         }
                         yield f"data: {json.dumps(finish_chunk)}\n\n".encode("utf-8")
+                        sent_stop_chunk = True
+                        sent_tool_finish = True
             elif kind == "response.reasoning_summary_part.added":
                 if compat in ("think-tags", "o3"):
                     if saw_any_summary:

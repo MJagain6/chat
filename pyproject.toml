@@ -16,6 +16,7 @@ dependencies = [
     "markupsafe==3.0.2",
     "requests==2.32.5",
     "urllib3==2.5.0",
+    "websockets==15.0.1",
     "werkzeug==3.1.3",
 ]
 
@@ -26,4 +27,4 @@ chatmock = "chatmock.cli:main"
 include = ["chatmock*"]
 
 [tool.setuptools.package-data]
-chatmock = ["prompt.md", "prompt_gpt5_codex.md", "dashboard/*.html", "dashboard/*.css", "dashboard/*.js"]
+chatmock = ["prompt.md", "prompt_gpt5_codex.md"]

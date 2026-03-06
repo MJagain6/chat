@@ -8,7 +8,9 @@ import requests
 from flask import Response, current_app, jsonify, make_response
 
 from .config import CHATGPT_RESPONSES_URL
+from .codex_app_server import connect_codex_app_server
 from .http import build_cors_headers
+from .reasoning import split_model_alias
 from .session import ensure_session_id
 from flask import request as flask_request
 from .utils import (
@@ -35,14 +37,7 @@ def normalize_model_name(name: str | None, debug_model: str | None = None) -> st
         return debug_model.strip()
     if not isinstance(name, str) or not name.strip():
         return "gpt-5"
-    base = name.split(":", 1)[0].strip()
-    for sep in ("-", "_"):
-        lowered = base.lower()
-        for effort in ("minimal", "low", "medium", "high", "xhigh"):
-            suffix = f"{sep}{effort}"
-            if lowered.endswith(suffix):
-                base = base[: -len(suffix)]
-                break
+    base, _, _ = split_model_alias(name)
     mapping = {
         "gpt5": "gpt-5",
         "gpt-5-latest": "gpt-5",
@@ -51,6 +46,9 @@ def normalize_model_name(name: str | None, debug_model: str | None = None) -> st
         "gpt5.2": "gpt-5.2",
         "gpt-5.2": "gpt-5.2",
         "gpt-5.2-latest": "gpt-5.2",
+        "gpt5.4": "gpt-5.4",
+        "gpt-5.4": "gpt-5.4",
+        "gpt-5.4-latest": "gpt-5.4",
         "gpt5.3-codex": "gpt-5.3-codex",
         "gpt-5.3-codex": "gpt-5.3-codex",
         "gpt-5.3-codex-latest": "gpt-5.3-codex",
@@ -67,7 +65,18 @@ def normalize_model_name(name: str | None, debug_model: str | None = None) -> st
         "codex-mini-latest": "codex-mini-latest",
         "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
     }
-    return mapping.get(base, base)
+    return mapping.get(base, base or "gpt-5")
+
+
+def _normalize_backend_service_tier(service_tier: str | None) -> str | None:
+    if not isinstance(service_tier, str) or not service_tier.strip():
+        return None
+    normalized = service_tier.strip().lower()
+    if normalized in ("off", "none", "unset", "default"):
+        return None
+    if normalized == "fast":
+        return "priority"
+    return normalized
 
 
 def start_upstream_request(
@@ -79,7 +88,89 @@ def start_upstream_request(
     tool_choice: Any | None = None,
     parallel_tool_calls: bool = False,
     reasoning_param: Dict[str, Any] | None = None,
+    service_tier: str | None = None,
+    web_search_mode: str | None = None,
 ):
+    upstream_mode = str(current_app.config.get("UPSTREAM_MODE") or "chatgpt-backend").strip().lower()
+    verbose = False
+    try:
+        verbose = bool(current_app.config.get("VERBOSE"))
+    except Exception:
+        verbose = False
+
+    if upstream_mode == "codex-app-server":
+        app_server_url = str(current_app.config.get("CODEX_APP_SERVER_URL") or "").strip()
+        if not app_server_url:
+            resp = make_response(
+                jsonify({"error": {"message": "Missing CODEX_APP_SERVER_URL for codex-app-server upstream"}}),
+                500,
+            )
+            for k, v in build_cors_headers().items():
+                resp.headers.setdefault(k, v)
+            return None, resp
+        manager = current_app.config.get("CODEX_APP_SERVER_MANAGER")
+        candidates: List[Dict[str, str]] = []
+        if manager is not None and hasattr(manager, "get_request_candidates"):
+            try:
+                candidates = list(manager.get_request_candidates() or [])
+            except Exception as exc:
+                if verbose:
+                    print(f"codex app-server pool candidate lookup failed: {exc}")
+                candidates = []
+        if not candidates:
+            candidates = [{"label": "default", "url": app_server_url}]
+
+        last_error = None
+        for candidate in candidates:
+            candidate_url = str(candidate.get("url") or "").strip() or app_server_url
+            candidate_label = str(candidate.get("label") or "default").strip() or "default"
+            if verbose:
+                print(f"codex app-server candidate -> {candidate_label} @ {candidate_url}")
+            try:
+                upstream = connect_codex_app_server(
+                    app_server_url=candidate_url,
+                    model=model,
+                    input_items=input_items,
+                    instructions=instructions,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    parallel_tool_calls=parallel_tool_calls,
+                    reasoning_param=reasoning_param,
+                    service_tier=service_tier,
+                    web_search_mode=web_search_mode,
+                    verbose=verbose,
+                )
+            except Exception as exc:
+                last_error = exc
+                if manager is not None and hasattr(manager, "mark_request_result"):
+                    try:
+                        manager.mark_request_result(candidate_label, success=False, error_message=str(exc))
+                    except Exception:
+                        pass
+                if verbose:
+                    print(f"codex app-server upstream failed for {candidate_label} ({candidate_url}): {exc}")
+                continue
+            if manager is not None and hasattr(manager, "wrap_upstream"):
+                try:
+                    upstream = manager.wrap_upstream(candidate_label, upstream)
+                except Exception:
+                    pass
+            return upstream, None
+
+        resp = make_response(
+            jsonify(
+                {
+                    "error": {
+                        "message": f"codex app-server upstream failed for all candidates: {last_error or 'no candidates available'}"
+                    }
+                }
+            ),
+            502,
+        )
+        for k, v in build_cors_headers().items():
+            resp.headers.setdefault(k, v)
+        return None, resp
+
     auth_candidates = get_effective_chatgpt_auth_candidates(ensure_fresh=True)
     if not auth_candidates:
         resp = make_response(
@@ -130,19 +221,16 @@ def start_upstream_request(
 
     if reasoning_param is not None:
         responses_payload["reasoning"] = reasoning_param
+    backend_service_tier = _normalize_backend_service_tier(service_tier)
+    if isinstance(backend_service_tier, str) and backend_service_tier:
+        responses_payload["service_tier"] = backend_service_tier
 
-    verbose = False
-    try:
-        verbose = bool(current_app.config.get("VERBOSE"))
-    except Exception:
-        verbose = False
     if verbose:
         _log_json("OUTBOUND >> ChatGPT Responses API payload", responses_payload)
 
     retryable_statuses = get_retryable_statuses()
     request_retry_limit = get_request_retry_limit()
     max_retry_interval = get_max_retry_interval_seconds()
-    last_error_resp = None
     last_exception = None
     last_upstream = None
 
@@ -181,11 +269,11 @@ def start_upstream_request(
                     stream=True,
                     timeout=600,
                 )
-            except requests.RequestException as e:
-                last_exception = e
-                mark_chatgpt_auth_result(label, success=False, error_message=str(e))
+            except requests.RequestException as exc:
+                last_exception = exc
+                mark_chatgpt_auth_result(label, success=False, error_message=str(exc))
                 if verbose:
-                    print(f"Upstream request failed for {label}: {e}")
+                    print(f"Upstream request failed for {label}: {exc}")
                 continue
 
             last_upstream = upstream
@@ -193,14 +281,12 @@ def start_upstream_request(
             should_retry = status in retryable_statuses
             has_more_candidates = idx < len(round_candidates) - 1
             has_more_rounds = round_idx < request_retry_limit
+
             if should_retry:
                 mark_chatgpt_auth_result(label, success=False, status_code=status)
                 if has_more_candidates or has_more_rounds:
                     if verbose:
-                        print(
-                            f"Upstream status {status} for {label}; "
-                            "retrying with next account."
-                        )
+                        print(f"Upstream status {status} for {label}; retrying with next account.")
                     try:
                         upstream.close()
                     except Exception:
@@ -215,15 +301,15 @@ def start_upstream_request(
         return last_upstream, None
 
     if last_exception is not None:
-        last_error_resp = make_response(
+        resp = make_response(
             jsonify({"error": {"message": f"Upstream ChatGPT request failed: {last_exception}"}}),
             502,
         )
     else:
-        last_error_resp = make_response(
+        resp = make_response(
             jsonify({"error": {"message": "No valid ChatGPT account is available."}}),
             401,
         )
     for k, v in build_cors_headers().items():
-        last_error_resp.headers.setdefault(k, v)
-    return None, last_error_resp
+        resp.headers.setdefault(k, v)
+    return None, resp
