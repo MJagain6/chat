@@ -12,7 +12,6 @@ from flask import Blueprint, current_app, jsonify, make_response, request, send_
 from .utils import (
     get_chatgpt_auth_records,
     get_max_retry_interval_seconds,
-    parse_jwt_claims,
     get_request_retry_limit,
     write_auth_file,
 )
@@ -382,16 +381,6 @@ def _extract_account_id(payload: Dict[str, Any]) -> str:
         account_id = payload.get("account_id") or ""
     if account_id:
         return str(account_id).strip()
-
-    id_token = tokens.get("id_token") if isinstance(tokens.get("id_token"), str) else ""
-    if not id_token and isinstance(payload.get("id_token"), str):
-        id_token = payload.get("id_token") or ""
-    if id_token:
-        claims = parse_jwt_claims(id_token)
-        if isinstance(claims, dict):
-            sub = claims.get("sub")
-            if isinstance(sub, str) and sub.strip():
-                return sub.strip()
     return ""
 
 
