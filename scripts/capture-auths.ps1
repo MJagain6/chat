@@ -61,6 +61,15 @@ function Test-AuthFileReady {
   }
 }
 
+function Convert-ToPsLiteral {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Value
+  )
+
+  return "'" + $Value.Replace("'", "''") + "'"
+}
+
 $created = @()
 $captureRoot = Join-Path $OutputDir ".capture"
 
@@ -81,45 +90,30 @@ try {
     Write-Host "[$label] Starting login flow"
     Write-Host "[$label] Capture path: $savedAuthPath"
 
-    $pythonCommand = Get-Command python -ErrorAction Stop
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonCommand.Source
-    $escapedChatmockPy = '"' + $chatmockPy.Replace('"', '\"') + '"'
-    $psi.Arguments = "$escapedChatmockPy login"
-    $psi.WorkingDirectory = $RepoDir
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.EnvironmentVariables["CHATGPT_LOCAL_HOME"] = $targetDir
-    if ($psi.EnvironmentVariables.ContainsKey("CODEX_HOME")) {
-      $psi.EnvironmentVariables.Remove("CODEX_HOME")
-    }
+    $repoDirLiteral = Convert-ToPsLiteral $RepoDir
+    $chatmockPyLiteral = Convert-ToPsLiteral $chatmockPy
+    $targetDirLiteral = Convert-ToPsLiteral $targetDir
+    $command = @"
+`$env:CHATGPT_LOCAL_HOME = $targetDirLiteral
+Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
+Set-Location $repoDirLiteral
+python $chatmockPyLiteral login
+"@
 
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $psi
+    $process = Start-Process `
+      -FilePath "powershell.exe" `
+      -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        $command
+      ) `
+      -PassThru
 
-    $stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{
-      param($sender, $eventArgs)
-      if ($null -ne $eventArgs.Data) {
-        Write-Host $eventArgs.Data
-      }
-    }
-    $stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{
-      param($sender, $eventArgs)
-      if ($null -ne $eventArgs.Data) {
-        Write-Host $eventArgs.Data
-      }
-    }
-
-    $process.add_OutputDataReceived($stdoutHandler)
-    $process.add_ErrorDataReceived($stderrHandler)
-
-    if (-not $process.Start()) {
+    if (-not $process) {
       throw "Unable to start login process for $label"
     }
-
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
 
     $authReady = $false
     while (-not $process.HasExited) {
