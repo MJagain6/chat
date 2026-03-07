@@ -22,6 +22,11 @@ if (-not (Test-Path $chatmockPy)) {
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 $existingIndexes = @()
+Get-ChildItem -Path $OutputDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.Name -match "^auth(\d+)\.json$") {
+    $existingIndexes += [int]$Matches[1]
+  }
+}
 Get-ChildItem -Path $OutputDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
   if ($_.Name -match "^acc(\d+)$") {
     $existingIndexes += [int]$Matches[1]
@@ -36,14 +41,18 @@ if ($existingIndexes.Count -gt 0) {
 $created = @()
 $oldChatgptLocalHome = $env:CHATGPT_LOCAL_HOME
 $oldCodexHome = $env:CODEX_HOME
+$captureRoot = Join-Path $OutputDir ".capture"
+
+New-Item -ItemType Directory -Force -Path $captureRoot | Out-Null
 
 Push-Location $RepoDir
 try {
   for ($offset = 0; $offset -lt $Count; $offset++) {
     $index = $startIndex + $offset
-    $label = "acc{0:D2}" -f $index
-    $targetDir = Join-Path $OutputDir $label
+    $label = "auth{0:D2}" -f $index
+    $targetDir = Join-Path $captureRoot $label
     $authPath = Join-Path $targetDir "auth.json"
+    $savedAuthPath = Join-Path $OutputDir ($label + ".json")
 
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
     $env:CHATGPT_LOCAL_HOME = $targetDir
@@ -51,7 +60,7 @@ try {
 
     Write-Host ""
     Write-Host "[$label] Starting login flow"
-    Write-Host "[$label] Target directory: $targetDir"
+    Write-Host "[$label] Capture path: $savedAuthPath"
 
     python $chatmockPy login
     if ($LASTEXITCODE -ne 0) {
@@ -62,8 +71,11 @@ try {
       throw "auth.json was not created for $label"
     }
 
-    $created += $authPath
-    Write-Host "[$label] Saved: $authPath"
+    Copy-Item -Path $authPath -Destination $savedAuthPath -Force
+    Remove-Item -Recurse -Force $targetDir
+
+    $created += $savedAuthPath
+    Write-Host "[$label] Saved: $savedAuthPath"
   }
 }
 finally {
@@ -80,6 +92,10 @@ finally {
   }
 
   Pop-Location
+}
+
+if (Test-Path $captureRoot) {
+  Remove-Item -Recurse -Force $captureRoot -ErrorAction SilentlyContinue
 }
 
 Write-Host ""
