@@ -38,9 +38,30 @@ if ($existingIndexes.Count -gt 0) {
   $startIndex = (($existingIndexes | Measure-Object -Maximum).Maximum) + 1
 }
 
+function Test-AuthFileReady {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  if (-not (Test-Path $Path)) {
+    return $false
+  }
+
+  try {
+    $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+      return $false
+    }
+    $null = $raw | ConvertFrom-Json -ErrorAction Stop
+    return $true
+  }
+  catch {
+    return $false
+  }
+}
+
 $created = @()
-$oldChatgptLocalHome = $env:CHATGPT_LOCAL_HOME
-$oldCodexHome = $env:CODEX_HOME
 $captureRoot = Join-Path $OutputDir ".capture"
 
 New-Item -ItemType Directory -Force -Path $captureRoot | Out-Null
@@ -55,20 +76,77 @@ try {
     $savedAuthPath = Join-Path $OutputDir ($label + ".json")
 
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-    $env:CHATGPT_LOCAL_HOME = $targetDir
-    Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
 
     Write-Host ""
     Write-Host "[$label] Starting login flow"
     Write-Host "[$label] Capture path: $savedAuthPath"
 
-    python $chatmockPy login
-    if ($LASTEXITCODE -ne 0) {
-      throw "Login failed for $label"
+    $pythonCommand = Get-Command python -ErrorAction Stop
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pythonCommand.Source
+    $null = $psi.ArgumentList.Add($chatmockPy)
+    $null = $psi.ArgumentList.Add("login")
+    $psi.WorkingDirectory = $RepoDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.Environment["CHATGPT_LOCAL_HOME"] = $targetDir
+    if ($psi.Environment.ContainsKey("CODEX_HOME")) {
+      $psi.Environment.Remove("CODEX_HOME")
     }
 
-    if (-not (Test-Path $authPath)) {
-      throw "auth.json was not created for $label"
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+
+    $stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{
+      param($sender, $eventArgs)
+      if ($null -ne $eventArgs.Data) {
+        Write-Host $eventArgs.Data
+      }
+    }
+    $stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{
+      param($sender, $eventArgs)
+      if ($null -ne $eventArgs.Data) {
+        Write-Host $eventArgs.Data
+      }
+    }
+
+    $process.add_OutputDataReceived($stdoutHandler)
+    $process.add_ErrorDataReceived($stderrHandler)
+
+    if (-not $process.Start()) {
+      throw "Unable to start login process for $label"
+    }
+
+    $process.BeginOutputReadLine()
+    $process.BeginErrorReadLine()
+
+    $authReady = $false
+    while (-not $process.HasExited) {
+      if (Test-AuthFileReady -Path $authPath) {
+        $authReady = $true
+        break
+      }
+      Start-Sleep -Milliseconds 300
+    }
+
+    if (-not $authReady -and (Test-AuthFileReady -Path $authPath)) {
+      $authReady = $true
+    }
+
+    if (-not $authReady) {
+      $process.WaitForExit()
+      if (-not (Test-AuthFileReady -Path $authPath)) {
+        throw "Login failed for $label"
+      }
+      $authReady = $true
+    }
+
+    if ($process -and -not $process.HasExited) {
+      if (-not $process.WaitForExit(5000)) {
+        Write-Host "[$label] auth.json is ready; stopping lingering login process"
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      }
     }
 
     Copy-Item -Path $authPath -Destination $savedAuthPath -Force
@@ -79,18 +157,6 @@ try {
   }
 }
 finally {
-  if ([string]::IsNullOrWhiteSpace($oldChatgptLocalHome)) {
-    Remove-Item Env:CHATGPT_LOCAL_HOME -ErrorAction SilentlyContinue
-  } else {
-    $env:CHATGPT_LOCAL_HOME = $oldChatgptLocalHome
-  }
-
-  if ([string]::IsNullOrWhiteSpace($oldCodexHome)) {
-    Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
-  } else {
-    $env:CODEX_HOME = $oldCodexHome
-  }
-
   Pop-Location
 }
 
