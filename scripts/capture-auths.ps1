@@ -49,7 +49,7 @@ Push-Location $RepoDir
 try {
   for ($offset = 0; $offset -lt $Count; $offset++) {
     $index = $startIndex + $offset
-    $label = "auth{0:D2}" -f $index
+    $label = "auth" + $index.ToString("00")
     $targetDir = Join-Path $captureRoot $label
     $authPath = Join-Path $targetDir "auth.json"
     $savedAuthPath = Join-Path $OutputDir ($label + ".json")
