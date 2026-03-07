@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -417,6 +418,11 @@ def _extract_account_id(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _auth_payload_fingerprint(payload: Dict[str, Any]) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _extract_acc_index(label: str) -> int:
     match = re.fullmatch(r"acc(\d+)", label.lower())
     if not match:
@@ -669,7 +675,7 @@ def dashboard_action_upload_auths():
         replace=False,
     )
     used_labels: set[str] = set()
-    account_to_path: Dict[str, str] = {}
+    fingerprint_to_path: Dict[str, str] = {}
 
     for existing in existing_files:
         existing_path = Path(existing)
@@ -678,9 +684,7 @@ def dashboard_action_upload_auths():
             used_labels.add(parent_label)
         payload = _read_auth_payload(existing_path)
         if isinstance(payload, dict):
-            account_id = _extract_account_id(payload)
-            if account_id:
-                account_to_path[account_id] = str(existing_path)
+            fingerprint_to_path[_auth_payload_fingerprint(payload)] = str(existing_path)
 
     for storage in incoming:
         try:
@@ -690,20 +694,20 @@ def dashboard_action_upload_auths():
                 raise ValueError("JSON root must be an object")
 
             account_id = _extract_account_id(payload)
+            fingerprint = _auth_payload_fingerprint(payload)
             target: Optional[Path] = None
             action = "created"
             previous_path = ""
 
-            if not replace and account_id and account_id in account_to_path:
-                target = Path(account_to_path[account_id])
+            if not replace and fingerprint in fingerprint_to_path:
+                target = Path(fingerprint_to_path[fingerprint])
                 action = "updated"
                 previous_path = str(target)
             else:
                 label = _next_acc_label(used_labels)
                 used_labels.add(label)
                 target = auth_root / label / "auth.json"
-                if account_id:
-                    account_to_path[account_id] = str(target)
+                fingerprint_to_path[fingerprint] = str(target)
 
             _write_auth_payload(target, payload)
             written.append(str(target))
