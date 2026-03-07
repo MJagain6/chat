@@ -41,7 +41,7 @@ Push-Location $RepoDir
 try {
   for ($offset = 0; $offset -lt $Count; $offset++) {
     $index = $startIndex + $offset
-    $label = "acc{0:d2}" -f $index
+    $label = "acc{0:D2}" -f $index
     $targetDir = Join-Path $OutputDir $label
     $authPath = Join-Path $targetDir "auth.json"
 
