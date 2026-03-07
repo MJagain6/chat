@@ -84,15 +84,15 @@ try {
     $pythonCommand = Get-Command python -ErrorAction Stop
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $pythonCommand.Source
-    $null = $psi.ArgumentList.Add($chatmockPy)
-    $null = $psi.ArgumentList.Add("login")
+    $escapedChatmockPy = '"' + $chatmockPy.Replace('"', '\"') + '"'
+    $psi.Arguments = "$escapedChatmockPy login"
     $psi.WorkingDirectory = $RepoDir
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $psi.Environment["CHATGPT_LOCAL_HOME"] = $targetDir
-    if ($psi.Environment.ContainsKey("CODEX_HOME")) {
-      $psi.Environment.Remove("CODEX_HOME")
+    $psi.EnvironmentVariables["CHATGPT_LOCAL_HOME"] = $targetDir
+    if ($psi.EnvironmentVariables.ContainsKey("CODEX_HOME")) {
+      $psi.EnvironmentVariables.Remove("CODEX_HOME")
     }
 
     $process = New-Object System.Diagnostics.Process
