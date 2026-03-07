@@ -155,6 +155,32 @@ def _auth_storage_root() -> Path:
     return root
 
 
+def _discover_auth_files(root: Path | None = None) -> List[str]:
+    base = root
+    if base is None:
+        explicit = (os.getenv("CHATMOCK_DASHBOARD_AUTH_DIR") or "").strip()
+        if explicit:
+            base = Path(explicit).expanduser()
+        else:
+            data_dir = (os.getenv("CHATMOCK_DATA_DIR") or "").strip()
+            if data_dir:
+                base = Path(data_dir).expanduser() / "accounts"
+            else:
+                current = _current_auth_files()
+                if current:
+                    first = Path(current[0]).expanduser()
+                    if first.name == "auth.json":
+                        base = first.parent.parent
+                if base is None:
+                    fallback = Path("/tmp/chatmock-accounts")
+                    if fallback.exists():
+                        base = fallback
+    if base is None or not base.exists():
+        return []
+    files = [str(path) for path in sorted(base.glob("acc*/auth.json")) if path.is_file()]
+    return _dedupe_paths(files)
+
+
 def _runtime_codex_manager():
     return current_app.config.get("CODEX_APP_SERVER_MANAGER")
 
@@ -201,6 +227,7 @@ def _get_runtime_app():
 def _current_settings_snapshot(app=None) -> Dict[str, Any]:
     runtime_app = app or _get_runtime_app()
     stored = _read_settings_file()
+    auth_files = _merge_auth_files(_current_auth_files(), _discover_auth_files(_auth_storage_root()), replace=False)
 
     if runtime_app is not None:
         reasoning_effort = str(runtime_app.config.get("REASONING_EFFORT", "medium"))
@@ -239,7 +266,7 @@ def _current_settings_snapshot(app=None) -> Dict[str, Any]:
         "allProxy": os.getenv("ALL_PROXY", ""),
         "noProxy": os.getenv("NO_PROXY", ""),
         "uploadReplaceDefault": _bool_value(stored.get("uploadReplaceDefault"), default=False),
-        "authFiles": _current_auth_files(),
+        "authFiles": auth_files,
     }
 
 
@@ -353,6 +380,12 @@ def apply_persisted_dashboard_settings(app) -> Dict[str, Any]:
     stored = _read_settings_file()
     if not stored:
         return _current_settings_snapshot(app=app)
+    stored = dict(stored)
+    stored["authFiles"] = _merge_auth_files(
+        _parse_auth_files_payload(stored.get("authFiles"), []),
+        _discover_auth_files(_auth_storage_root()),
+        replace=False,
+    )
     return _apply_settings(stored, app=app, persist=False)
 
 
@@ -630,7 +663,11 @@ def dashboard_action_upload_auths():
     upload_results: List[Dict[str, Any]] = []
     primary_payload: Dict[str, Any] | None = None
 
-    existing_files = [] if replace else _current_auth_files()
+    existing_files = [] if replace else _merge_auth_files(
+        _current_auth_files(),
+        _discover_auth_files(auth_root),
+        replace=False,
+    )
     used_labels: set[str] = set()
     account_to_path: Dict[str, str] = {}
 
